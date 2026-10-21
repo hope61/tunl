@@ -91,14 +91,17 @@ func ApplyAgentConnmark(cfg *config.Config) error {
 		return fmt.Errorf("tunl nftables table not found; run ApplyAgentRules first")
 	}
 
+	// All connmark rules run at priority -150: after conntrack (-200) resolves
+	// entries, but before iptables DNAT (-100) so Docker port-mapping still works.
 	chainPrerouting := conn.AddChain(&nftables.Chain{
 		Name:     "prerouting_mark",
 		Table:    table,
 		Type:     nftables.ChainTypeFilter,
 		Hooknum:  nftables.ChainHookPrerouting,
-		Priority: chainPriority(-390),
+		Priority: chainPriority(-150),
 	})
 
+	// Mark new connections arriving on the tunnel interface.
 	conn.AddRule(&nftables.Rule{
 		Table: table,
 		Chain: chainPrerouting,
@@ -112,20 +115,11 @@ func ApplyAgentConnmark(cfg *config.Config) error {
 		},
 	})
 
-	// Route reply packets from Docker/forwarded services back through the tunnel.
-	// This must run AFTER conntrack (-200) so ct mark is resolved for reply packets.
-	// Priority -150 sits between conntrack (-200) and NAT/DNAT (-100).
-	chainPreroutingReply := conn.AddChain(&nftables.Chain{
-		Name:     "prerouting_reroute",
-		Table:    table,
-		Type:     nftables.ChainTypeFilter,
-		Hooknum:  nftables.ChainHookPrerouting,
-		Priority: chainPriority(-150),
-	})
-
+	// Route reply packets (including from Docker/forwarded services) back through
+	// the tunnel by copying ct mark to packet mark before the routing decision.
 	conn.AddRule(&nftables.Rule{
 		Table: table,
-		Chain: chainPreroutingReply,
+		Chain: chainPrerouting,
 		Exprs: []expr.Any{
 			&expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1},
 			&expr.Cmp{Op: expr.CmpOpNeq, Register: 1, Data: ifnameBytes(cfg.Interface)},
