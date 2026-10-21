@@ -7,44 +7,75 @@ import (
 )
 
 func Up(cfg *config.Config) error {
-	if InterfaceExists(cfg.Interface) {
-		if err := RemoveInterface(cfg.Interface); err != nil {
-			return fmt.Errorf("removing existing interface: %w", err)
-		}
-	}
+	needsWGUpdate := !InterfaceExists(cfg.Interface)
 
-	if err := CreateInterface(cfg); err != nil {
-		return err
-	}
-
-	if err := ConfigureWireGuard(cfg); err != nil {
-		RemoveInterface(cfg.Interface)
-		return err
-	}
-
-	if cfg.Role == config.RoleServer {
-		if err := EnableIPForward(); err != nil {
-			RemoveInterface(cfg.Interface)
+	if needsWGUpdate {
+		if err := CreateInterface(cfg); err != nil {
 			return err
 		}
-		if err := ApplyServerRules(cfg); err != nil {
+		if err := ConfigureWireGuard(cfg); err != nil {
 			RemoveInterface(cfg.Interface)
 			return err
 		}
 	} else {
-		if err := ApplyAgentRules(cfg); err != nil {
+		if err := wgNeedsUpdate(cfg); err == nil {
+			if err := ConfigureWireGuard(cfg); err != nil {
+				return err
+			}
+		}
+	}
+
+	cleanup := func() {
+		if needsWGUpdate {
 			RemoveInterface(cfg.Interface)
+		}
+	}
+
+	if cfg.Role == config.RoleServer {
+		if err := EnableIPForward(); err != nil {
+			cleanup()
+			return err
+		}
+		if err := ApplyServerRules(cfg); err != nil {
+			cleanup()
+			return err
+		}
+	} else {
+		if err := ApplyAgentRules(cfg); err != nil {
+			cleanup()
 			return err
 		}
 		if err := ApplyAgentConnmark(cfg); err != nil {
-			RemoveInterface(cfg.Interface)
+			cleanup()
 			RemoveRules()
 			return err
 		}
 		if err := ApplyAgentRouting(cfg.Interface, cfg.TunnelAddr, cfg.PeerAddr); err != nil {
-			RemoveInterface(cfg.Interface)
+			cleanup()
 			RemoveRules()
 			return err
+		}
+	}
+	return nil
+}
+
+// wgNeedsUpdate returns nil if WG config needs updating (peer mismatch).
+func wgNeedsUpdate(cfg *config.Config) error {
+	status, err := GetPeerStatus(cfg.Interface)
+	if err != nil {
+		return nil // can't determine, update to be safe
+	}
+
+	if cfg.Role == config.RoleServer {
+		if cfg.AllowedAgentKey == "" && status == nil {
+			return fmt.Errorf("no update needed")
+		}
+		if cfg.AllowedAgentKey != "" && status != nil && status.PublicKey == cfg.AllowedAgentKey {
+			return fmt.Errorf("no update needed")
+		}
+	} else {
+		if status != nil && status.PublicKey == cfg.PeerPubKey {
+			return fmt.Errorf("no update needed")
 		}
 	}
 	return nil

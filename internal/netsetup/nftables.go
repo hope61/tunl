@@ -141,6 +141,8 @@ func deleteOwnTable(conn *nftables.Conn) {
 		Family: nftables.TableFamilyINet,
 		Name:   tableName,
 	})
+	// Flush the delete separately; ignore errors if the table doesn't exist yet
+	conn.Flush()
 }
 
 func protoNumber(proto string) byte {

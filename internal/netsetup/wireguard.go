@@ -69,6 +69,11 @@ func ConfigureWireGuard(cfg *config.Config) error {
 		if err != nil {
 			return err
 		}
+		// Agent needs 0.0.0.0/0 in allowed IPs so reply traffic to arbitrary
+		// client IPs can be routed back through the tunnel via policy routing.
+		peer.AllowedIPs = []net.IPNet{
+			{IP: net.IPv4zero, Mask: net.CIDRMask(0, 32)},
+		}
 		keepalive := 25 * time.Second
 		peer.PersistentKeepaliveInterval = &keepalive
 		wgCfg.Peers = []wgtypes.PeerConfig{peer}

@@ -12,7 +12,9 @@ services:
         ipv4_address: 172.30.0.10
       wan:
         ipv4_address: 172.31.0.10
-    command: ["sleep", "infinity"]
+    volumes:
+      - shared:/shared
+    entrypoint: ["/bin/bash", "/src/test/setup-vps.sh"]
 
   home:
     build:
@@ -25,7 +27,9 @@ services:
     networks:
       wan:
         ipv4_address: 172.31.0.20
-    command: ["sleep", "infinity"]
+    volumes:
+      - shared:/shared
+    entrypoint: ["/bin/bash", "/src/test/setup-home.sh"]
 
   client:
     build:
@@ -36,10 +40,15 @@ services:
     networks:
       public:
         ipv4_address: 172.30.0.30
-    entrypoint: ["/src/test/integration.sh"]
+    volumes:
+      - shared:/shared
+    entrypoint: ["/bin/bash", "/src/test/integration.sh"]
     depends_on:
       - vps
       - home
+
+volumes:
+  shared:
 
 networks:
   public:

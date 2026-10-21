@@ -28,8 +28,10 @@ func ApplyAgentRouting(ifaceName, tunnelAddr, peerAddr string) error {
 	if serverIP == nil {
 		return fmt.Errorf("invalid peer address %q", peerAddr)
 	}
+	// Default route via tunnel for marked reply traffic
 	route := &netlink.Route{
-		Dst:       &net.IPNet{IP: serverIP, Mask: net.CIDRMask(32, 32)},
+		Dst:       &net.IPNet{IP: net.IPv4zero, Mask: net.CIDRMask(0, 32)},
+		Gw:        serverIP,
 		LinkIndex: link.Attrs().Index,
 		Table:     routingTable,
 	}
@@ -52,7 +54,8 @@ func RemoveAgentRouting(ifaceName, peerAddr string) error {
 	serverIP := net.ParseIP(peerAddr).To4()
 	if serverIP != nil {
 		route := &netlink.Route{
-			Dst:   &net.IPNet{IP: serverIP, Mask: net.CIDRMask(32, 32)},
+			Dst:   &net.IPNet{IP: net.IPv4zero, Mask: net.CIDRMask(0, 32)},
+			Gw:    serverIP,
 			Table: routingTable,
 		}
 		netlink.RouteDel(route)
