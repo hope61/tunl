@@ -78,6 +78,11 @@ var serverInitCmd = &cobra.Command{
 
 		fmt.Println("Server initialized successfully.")
 		fmt.Println()
+		fmt.Printf("IMPORTANT: Ensure UDP port %d is open in your cloud provider's firewall/security group.\n", listenPort)
+		fmt.Printf("           tunl handles OS-level firewalls (ufw) automatically, but cloud firewalls\n")
+		fmt.Printf("           (AWS Security Groups, DigitalOcean/Hetzner Firewalls, etc.) must be\n")
+		fmt.Printf("           configured through your provider's dashboard or API.\n")
+		fmt.Println()
 		fmt.Println("Join token (run this on the home machine):")
 		fmt.Printf("  tunl join %s\n", tok)
 		fmt.Println()

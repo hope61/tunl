@@ -79,6 +79,12 @@ var addCmd = &cobra.Command{
 			fmt.Printf(" -> %d", toPort)
 		}
 		fmt.Println()
+		agentPort := port
+		if toPort != 0 {
+			agentPort = toPort
+		}
+		fmt.Printf("\nNow run this on the home machine (agent):\n")
+		fmt.Printf("  tunl expose %d/%s\n", agentPort, proto)
 		return nil
 	},
 }
@@ -206,6 +212,7 @@ var exposeCmd = &cobra.Command{
 		}
 
 		fmt.Printf("Exposed port %d/%s through tunnel\n", port, proto)
+		fmt.Printf("Make sure the service is listening on 0.0.0.0:%d (not a specific IP).\n", port)
 		return nil
 	},
 }

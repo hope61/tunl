@@ -61,7 +61,22 @@ func Up(cfg *config.Config) error {
 			return err
 		}
 	}
+
+	configureUFW(cfg)
+
 	return nil
+}
+
+func configureUFW(cfg *config.Config) {
+	if !IsUFWActive() {
+		return
+	}
+	if cfg.Role == config.RoleServer {
+		UFWAllowPort(cfg.ListenPort, "udp")
+		UFWAllowTunnelForwarding(cfg.Interface)
+	} else {
+		UFWAllowTunnelForwarding(cfg.Interface)
+	}
 }
 
 // wgNeedsUpdate returns nil if WG config needs updating (peer mismatch).

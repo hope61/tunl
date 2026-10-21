@@ -30,10 +30,13 @@ func RunAll(cfg *config.Config) []Check {
 	if cfg.Role == config.RoleServer {
 		checks = append(checks, checkPortConflicts(cfg)...)
 		checks = append(checks, checkCloudflareProxy(cfg))
+		checks = append(checks, checkUFWServer(cfg)...)
 	}
 	if cfg.Role == config.RoleAgent {
 		checks = append(checks, checkRoutingRules())
+		checks = append(checks, checkRPFilter(cfg))
 		checks = append(checks, checkExposedPorts(cfg)...)
+		checks = append(checks, checkUFWAgent(cfg))
 	}
 
 	return checks
@@ -86,7 +89,11 @@ func checkHandshake(cfg *config.Config) Check {
 	if status.LastHandshake.IsZero() {
 		c.Status = "fail"
 		c.Detail = "no handshake yet"
-		c.Fix = "check endpoint reachability, firewall, and peer key authorization"
+		if cfg.Role == config.RoleServer {
+			c.Fix = fmt.Sprintf("agent hasn't connected — verify it joined and UDP port %d is open in your cloud provider's firewall", cfg.ListenPort)
+		} else {
+			c.Fix = fmt.Sprintf("can't reach server at %s — check that the port is open in the VPS cloud firewall and OS firewall (ufw, iptables)", cfg.Endpoint)
+		}
 		return c
 	}
 	age := status.HandshakeAge
@@ -241,6 +248,77 @@ var cloudflareRanges = []string{
 	"141.101.64.0/18", "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20",
 	"197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
 	"104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
+}
+
+func checkRPFilter(cfg *config.Config) Check {
+	c := Check{Name: "rp_filter"}
+	allVal := readSysctl("/proc/sys/net/ipv4/conf/all/rp_filter")
+	ifVal := readSysctl(fmt.Sprintf("/proc/sys/net/ipv4/conf/%s/rp_filter", cfg.Interface))
+
+	if allVal == "1" || ifVal == "1" {
+		c.Status = "fail"
+		c.Detail = "strict reverse-path filtering will drop tunnel traffic with public source IPs"
+		c.Fix = "tunl up (auto-fixes this), or: sysctl -w net.ipv4.conf.all.rp_filter=2"
+	} else {
+		c.Status = "ok"
+		c.Detail = "loose mode"
+	}
+	return c
+}
+
+func readSysctl(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func checkUFWServer(cfg *config.Config) []Check {
+	var checks []Check
+	if !netsetup.IsUFWActive() {
+		return checks
+	}
+
+	c := Check{Name: "ufw WireGuard port"}
+	if netsetup.UFWHasRule(fmt.Sprintf("%d/udp", cfg.ListenPort)) {
+		c.Status = "ok"
+		c.Detail = fmt.Sprintf("UDP %d is allowed", cfg.ListenPort)
+	} else {
+		c.Status = "fail"
+		c.Detail = fmt.Sprintf("UDP %d is not allowed in ufw — WireGuard packets will be dropped", cfg.ListenPort)
+		c.Fix = fmt.Sprintf("tunl up (auto-fixes this), or: ufw allow %d/udp", cfg.ListenPort)
+	}
+	checks = append(checks, c)
+
+	c2 := Check{Name: "ufw tunnel forwarding"}
+	if netsetup.UFWHasRule(fmt.Sprintf("on %s", cfg.Interface)) {
+		c2.Status = "ok"
+		c2.Detail = "tunnel forwarding allowed"
+	} else {
+		c2.Status = "fail"
+		c2.Detail = "forwarded traffic through the tunnel may be blocked by ufw"
+		c2.Fix = fmt.Sprintf("tunl up (auto-fixes this), or: ufw route allow in on %s", cfg.Interface)
+	}
+	checks = append(checks, c2)
+
+	return checks
+}
+
+func checkUFWAgent(cfg *config.Config) Check {
+	c := Check{Name: "ufw"}
+	if !netsetup.IsUFWActive() {
+		c.Status = "ok"
+		c.Detail = "inactive"
+	} else if netsetup.UFWHasRule(fmt.Sprintf("on %s", cfg.Interface)) {
+		c.Status = "ok"
+		c.Detail = "tunnel forwarding allowed"
+	} else {
+		c.Status = "warn"
+		c.Detail = "ufw is active — forwarded traffic (e.g. Docker containers) may be blocked"
+		c.Fix = fmt.Sprintf("tunl up (auto-fixes this), or: ufw route allow in on %s", cfg.Interface)
+	}
+	return c
 }
 
 func isCloudflareIP(ip net.IP) bool {
