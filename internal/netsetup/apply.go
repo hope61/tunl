@@ -50,6 +50,11 @@ func Up(cfg *config.Config) error {
 			RemoveRules()
 			return err
 		}
+		if err := SetLooseRPFilter(cfg.Interface); err != nil {
+			cleanup()
+			RemoveRules()
+			return err
+		}
 		if err := ApplyAgentRouting(cfg.Interface, cfg.TunnelAddr, cfg.PeerAddr); err != nil {
 			cleanup()
 			RemoveRules()

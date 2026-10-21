@@ -112,6 +112,23 @@ func ApplyAgentConnmark(cfg *config.Config) error {
 		},
 	})
 
+	// Route reply packets from Docker/forwarded services back through the tunnel.
+	// When a service runs in a container, replies are forwarded (not locally generated)
+	// and bypass the output_mark chain. This rule catches those replies in prerouting
+	// by copying the conntrack mark to the packet mark before the routing decision.
+	conn.AddRule(&nftables.Rule{
+		Table: table,
+		Chain: chainPrerouting,
+		Exprs: []expr.Any{
+			&expr.Meta{Key: expr.MetaKeyIIFNAME, Register: 1},
+			&expr.Cmp{Op: expr.CmpOpNeq, Register: 1, Data: ifnameBytes(cfg.Interface)},
+			&expr.Ct{Register: 1, Key: expr.CtKeyMARK},
+			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: binaryutil.NativeEndian.PutUint32(FWMark)},
+			&expr.Immediate{Register: 1, Data: binaryutil.NativeEndian.PutUint32(FWMark)},
+			&expr.Meta{Key: expr.MetaKeyMARK, SourceRegister: true, Register: 1},
+		},
+	})
+
 	chainOutput := conn.AddChain(&nftables.Chain{
 		Name:     "output_mark",
 		Table:    table,

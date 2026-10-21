@@ -10,6 +10,7 @@ const (
 	sysctlFile     = "/etc/sysctl.d/99-tunl.conf"
 	ipForwardProc  = "/proc/sys/net/ipv4/ip_forward"
 	ipForwardValue = "net.ipv4.ip_forward = 1\n"
+	rpFilterAll    = "/proc/sys/net/ipv4/conf/all/rp_filter"
 )
 
 func EnableIPForward() error {
@@ -40,6 +41,26 @@ func ensureSysctlFile() error {
 func RemoveSysctlFile() error {
 	if err := os.Remove(sysctlFile); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("removing sysctl file: %w", err)
+	}
+	return nil
+}
+
+func SetLooseRPFilter(ifaceName string) error {
+	paths := []string{
+		rpFilterAll,
+		fmt.Sprintf("/proc/sys/net/ipv4/conf/%s/rp_filter", ifaceName),
+	}
+	for _, p := range paths {
+		current, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		if strings.TrimSpace(string(current)) == "0" || strings.TrimSpace(string(current)) == "2" {
+			continue
+		}
+		if err := os.WriteFile(p, []byte("2"), 0644); err != nil {
+			return fmt.Errorf("setting rp_filter on %s: %w", p, err)
+		}
 	}
 	return nil
 }
