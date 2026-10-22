@@ -14,6 +14,10 @@ import (
 const (
 	tableName = "tunl"
 	fwMark    = 0x54554e4c // "TUNL" in hex
+
+	ChainMSSForward     = "mss_forward"
+	ChainMSSPrerouting  = "mss_prerouting"
+	ChainMSSPostrouting = "mss_postrouting"
 )
 
 func ApplyServerRules(cfg *config.Config) error {
@@ -75,7 +79,18 @@ func ApplyServerRules(cfg *config.Config) error {
 		}
 	}
 
-	addMSSClamp(conn, chainForward, table, cfg.MTU)
+	// MSS clamping lives in its own chain at mangle priority so it runs before
+	// the accept verdicts above; otherwise SYNs are accepted unclamped and large
+	// segments get blackholed by the smaller tunnel MTU.
+	chainMSS := conn.AddChain(&nftables.Chain{
+		Name:     ChainMSSForward,
+		Table:    table,
+		Type:     nftables.ChainTypeFilter,
+		Hooknum:  nftables.ChainHookForward,
+		Priority: nftables.ChainPriorityMangle,
+	})
+	addMSSClamp(conn, chainMSS, table, expr.MetaKeyIIFNAME, cfg.Interface, cfg.MTU)
+	addMSSClamp(conn, chainMSS, table, expr.MetaKeyOIFNAME, cfg.Interface, cfg.MTU)
 
 	if err := conn.Flush(); err != nil {
 		return fmt.Errorf("applying nftables rules: %w", err)
@@ -116,7 +131,25 @@ func ApplyAgentRules(cfg *config.Config) error {
 
 	addInputDropRule(conn, chainInput, table, cfg.Interface)
 
-	addMSSClamp(conn, chainInput, table, cfg.MTU)
+	// Clamp SYNs arriving from the tunnel before routing (covers both local and
+	// Docker-forwarded services) and SYN-ACKs leaving through it.
+	chainMSSPre := conn.AddChain(&nftables.Chain{
+		Name:     ChainMSSPrerouting,
+		Table:    table,
+		Type:     nftables.ChainTypeFilter,
+		Hooknum:  nftables.ChainHookPrerouting,
+		Priority: nftables.ChainPriorityMangle,
+	})
+	addMSSClamp(conn, chainMSSPre, table, expr.MetaKeyIIFNAME, cfg.Interface, cfg.MTU)
+
+	chainMSSPost := conn.AddChain(&nftables.Chain{
+		Name:     ChainMSSPostrouting,
+		Table:    table,
+		Type:     nftables.ChainTypeFilter,
+		Hooknum:  nftables.ChainHookPostrouting,
+		Priority: nftables.ChainPriorityMangle,
+	})
+	addMSSClamp(conn, chainMSSPost, table, expr.MetaKeyOIFNAME, cfg.Interface, cfg.MTU)
 
 	if err := conn.Flush(); err != nil {
 		return fmt.Errorf("applying agent nftables rules: %w", err)
@@ -265,12 +298,14 @@ func addInputDropRule(conn *nftables.Conn, chain *nftables.Chain, table *nftable
 	})
 }
 
-func addMSSClamp(conn *nftables.Conn, chain *nftables.Chain, table *nftables.Table, mtu int) {
-	mss := uint16(mtu - 40 - 20) // IPv4 header - TCP header
+func addMSSClamp(conn *nftables.Conn, chain *nftables.Chain, table *nftables.Table, ifaceKey expr.MetaKey, iface string, mtu int) {
+	mss := uint16(mtu - 40) // 20-byte IPv4 header + 20-byte TCP header
 	conn.AddRule(&nftables.Rule{
 		Table: table,
 		Chain: chain,
 		Exprs: []expr.Any{
+			&expr.Meta{Key: ifaceKey, Register: 1},
+			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: ifnameBytes(iface)},
 			&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
 			&expr.Cmp{Op: expr.CmpOpEq, Register: 1, Data: []byte{6}}, // TCP only
 			&expr.Payload{
@@ -341,6 +376,24 @@ func GetTableRules() ([]*nftables.Rule, error) {
 		}
 	}
 	return rules, nil
+}
+
+// ChainExists reports whether the named chain exists in the inet tunl table.
+func ChainExists(name string) bool {
+	conn, err := nftables.New()
+	if err != nil {
+		return false
+	}
+	chains, err := conn.ListChainsOfTableFamily(nftables.TableFamilyINet)
+	if err != nil {
+		return false
+	}
+	for _, c := range chains {
+		if c.Table.Name == tableName && c.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func TableExists() bool {

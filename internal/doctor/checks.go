@@ -25,6 +25,7 @@ func RunAll(cfg *config.Config) []Check {
 	checks = append(checks, checkIPForward(cfg))
 	checks = append(checks, checkHandshake(cfg))
 	checks = append(checks, checkNftables())
+	checks = append(checks, checkMSSClamp(cfg))
 	checks = append(checks, checkSubnetCollision(cfg))
 
 	if cfg.Role == config.RoleServer {
@@ -118,6 +119,25 @@ func checkNftables() Check {
 		c.Detail = "inet tunl table missing"
 		c.Fix = "tunl up"
 	}
+	return c
+}
+
+func checkMSSClamp(cfg *config.Config) Check {
+	c := Check{Name: "TCP MSS clamping"}
+	chains := []string{netsetup.ChainMSSPrerouting, netsetup.ChainMSSPostrouting}
+	if cfg.Role == config.RoleServer {
+		chains = []string{netsetup.ChainMSSForward}
+	}
+	for _, name := range chains {
+		if !netsetup.ChainExists(name) {
+			c.Status = "fail"
+			c.Detail = fmt.Sprintf("chain %s missing; large TCP packets may stall over the tunnel", name)
+			c.Fix = "tunl up"
+			return c
+		}
+	}
+	c.Status = "ok"
+	c.Detail = fmt.Sprintf("MSS clamped to %d on %s", cfg.MTU-40, cfg.Interface)
 	return c
 }
 
